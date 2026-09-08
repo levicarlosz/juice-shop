@@ -36,38 +36,42 @@ jobs:
           path: ~/artifacts
           destination: node-build
   deploy:
-    # This is an example deploy job, not actually used by the workflow
     docker:
       - image: cimg/base:stable
     steps:
+      # ==========================================================
+      # ERRO 2 - LUGAR CERTO DO "steps"
+      # O "steps" pertence AQUI, dentro da definicao do job.
+      # No arquivo com erro ele estava la embaixo, dentro de
+      # "workflows > jobs > deploy", o que gera:
+      #   Error calling job: 'deploy'
+      #   Unexpected argument(s): steps
+      # ==========================================================
+
+      # ==========================================================
+      # ERRO 1 - A CAUSA DO PROBLEMA DO ALUNO
+      # No config dele estava assim:
+      #
+      #   - setup_remote_docker:
+      #       version: 24.0.7
+      #
+      # O CircleCI nao aceita mais numero de versao fixo do Docker
+      # nesse step. As tags validas hoje sao: default, edge,
+      # previous, docker29, docker27, docker26 (e a antiga 20.10.24).
+      # Com "24.0.7" o job e rejeitado em 0s, antes de rodar
+      # qualquer step, com a mensagem:
+      #   "Job was rejected because the requested resource class is
+      #    not available for Remote Docker, or the Docker version is
+      #    not supported on this resource class."
+      #
+      # CORRECAO: usar o step sem a chave "version" (abaixo),
+      # ou entao "- setup_remote_docker:" + "    version: default".
+      # ==========================================================
+      - setup_remote_docker
+
       - run:
-          name: Plan deployment
-          command: |-
-            circleci run release plan deploy \
-              --environment-name="default" \
-              --component-name="deploy" \
-              --target-version="1.0.${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}"
-      # Replace this with steps to deploy to users
-      - run:
-          name: deploy
-          command: '#e.g. ./deploy.sh'
-      - run:
-          name: found github actions config
-          command: ':'
-      - run:
-          name: found gitlab workflows config
-          command: ':'
-      - run:
-          name: Update deployment status to running
-          command: circleci run release update deploy --status=RUNNING
-      - run:
-          name: Update deployment status to success
-          command: circleci run release update deploy --status=SUCCESS
-          when: on_success
-      - run:
-          name: Update deployment status to failed
-          command: circleci run release update deploy --status=FAILED
-          when: on_fail
+          name: Confirma que o remote Docker subiu
+          command: docker version
 workflows:
   build-and-test:
     jobs:
@@ -76,7 +80,5 @@ workflows:
           requires:
             - test-node
       - deploy:
-          steps:
-            - setup_remote_docker
-            - attach_workspace:
-                at: .
+          requires:
+            - build-node
