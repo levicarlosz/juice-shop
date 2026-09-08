@@ -75,7 +75,7 @@ workflows:
       - build-node:
           requires:
             - test-node
-     - deploy:
+      - deploy:
           steps:
             - setup_remote_docker
             - attach_workspace:
