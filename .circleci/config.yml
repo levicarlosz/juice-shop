@@ -1,84 +1,90 @@
-# This config was automatically generated from your source code
-# Stacks detected: cicd:github-actions:.github/workflows,cicd:gitlab-workflows:.,deps:node:.
+# Versão do Circle CI config file
 version: 2.1
 orbs:
-  node: circleci/node@5
+  browser-tools: circleci/browser-tools@1.1.0
+  aws-cli: circleci/aws-cli@3.1.4
 jobs:
-  test-node:
-    # Install node dependencies and run tests
-    executor: node/default
+
+  build:
+    docker:
+      - image: cimg/node:22.22.3
     steps:
       - checkout
-      - node/install-packages:
-          cache-path: ~/project/node_modules
-          override-ci-command: npm install
-      - run:
-          name: Run tests
-          command: npm test --passWithNoTests
-  build-node:
-    # Build node project
-    executor: node/default
+      - run: sudo npm install -g @angular/cli
+      - run: sudo npm install -g grunt-cli
+      - run: npm install --legacy-peer-deps
+      - run: ls -la
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./*
+  test:
+    docker:
+      - image: cimg/node:22.22.3-browsers
     steps:
-      - checkout
-      - node/install-packages:
-          cache-path: ~/project/node_modules
-          override-ci-command: npm install
-      - run:
-          command: npm run build
-      - run:
-          name: Create the ~/artifacts directory if it doesn't exist
-          command: mkdir -p ~/artifacts
-      # Copy output to artifacts dir
-      - run:
-          name: Copy artifacts
-          command: cp -R build dist public .output .next .docusaurus ~/artifacts 2>/dev/null || true
-      - store_artifacts:
-          path: ~/artifacts
-          destination: node-build
+      - attach_workspace:
+          at: .
+      - run: ls -la
+      - run: sudo npm install -g @angular/cli
+      - run: sudo npm install -g grunt-cli
+      - run: npm run test:frontend && npm run test:server
   deploy:
     docker:
       - image: cimg/base:stable
+        auth:
+          username: $DOCKERHUB_USERNAME
+          password: $DOCKERHUB_PASSWORD
     steps:
-      # ==========================================================
-      # ERRO 2 - LUGAR CERTO DO "steps"
-      # O "steps" pertence AQUI, dentro da definicao do job.
-      # No arquivo com erro ele estava la embaixo, dentro de
-      # "workflows > jobs > deploy", o que gera:
-      #   Error calling job: 'deploy'
-      #   Unexpected argument(s): steps
-      # ==========================================================
-
-      # ==========================================================
-      # ERRO 1 - A CAUSA DO PROBLEMA DO ALUNO
-      # No config dele estava assim:
+      # =====================================================================
+      # >>> ERA AQUI QUE ESTAVA O ERRO <<<
       #
+      # Antes:
       #   - setup_remote_docker:
       #       version: 24.0.7
       #
-      # O CircleCI nao aceita mais numero de versao fixo do Docker
-      # nesse step. As tags validas hoje sao: default, edge,
-      # previous, docker29, docker27, docker26 (e a antiga 20.10.24).
-      # Com "24.0.7" o job e rejeitado em 0s, antes de rodar
-      # qualquer step, com a mensagem:
-      #   "Job was rejected because the requested resource class is
-      #    not available for Remote Docker, or the Docker version is
-      #    not supported on this resource class."
+      # O CircleCI nao aceita mais um numero de versao fixo do Docker nesse
+      # step. As tags validas hoje sao: default, edge, previous, docker29,
+      # docker27 e docker26 (alem da antiga 20.10.24, ja depreciada).
+      # Com "24.0.7" o job era rejeitado em 0s, antes de rodar qualquer
+      # comando, com a mensagem:
+      #   "Job was rejected because the requested resource class is not
+      #    available for Remote Docker, or the Docker version is not
+      #    supported on this resource class."
       #
-      # CORRECAO: usar o step sem a chave "version" (abaixo),
-      # ou entao "- setup_remote_docker:" + "    version: default".
-      # ==========================================================
+      # Correcao: usar o step sem a chave "version", como abaixo.
+      # (Se quiser deixar explicito, use "version: default" no lugar.)
+      # =====================================================================
       - setup_remote_docker
 
+      - attach_workspace:
+          at: .
+      - aws-cli/setup:
+          profile-name: default
+      # Comandos para buildar a imagem docker e publicar no Docker HUB
+      - run: docker build -t $DOCKERHUB_USERNAME/juice-shop-app:$CIRCLE_SHA1 -t $DOCKERHUB_USERNAME/juice-shop-app:latest ./ # Caminho de onde o Dockerfile é carregado
+      - run: echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+      - run: docker push $DOCKERHUB_USERNAME/juice-shop-app:$CIRCLE_SHA1
+      - run: docker push $DOCKERHUB_USERNAME/juice-shop-app:latest
+      # Comandos para atualizar o ambiente no Elastic Beanstalk toda vez que uma nova imagem é publicada no docker hub
       - run:
-          name: Confirma que o remote Docker subiu
-          command: docker version
+          name: Deploy to Elastic Beanstalk
+          command: |
+            aws configure set region us-east-1
+            aws s3 cp ebs-app-options.json s3://juice-shop-env-prod-rogerio
+            aws elasticbeanstalk create-application-version --application-name juice-shop-app-prod --version-label $CIRCLE_SHA1 --source-bundle S3Bucket="juice-shop-env-prod-rogerio",S3Key="ebs-app-options.json"
+            aws elasticbeanstalk update-environment --environment-name juice-shop-env-prod --version-label $CIRCLE_SHA1
+
+# ATENCAO: o "steps" fica sempre dentro da definicao do job, la em cima.
+# Aqui embaixo, na chamada do job dentro do workflow, so entram chaves como
+# requires, filters, context e name. Colocar "steps" aqui gera o erro:
+#   Error calling job: 'deploy' / Unexpected argument(s): steps
 workflows:
-  build-and-test:
+  build_test_deploy:
     jobs:
-      - test-node
-      - build-node:
+      - build
+      - test:
           requires:
-            - test-node
+            - build
       - deploy:
           requires:
-            - build-node
+            - test
